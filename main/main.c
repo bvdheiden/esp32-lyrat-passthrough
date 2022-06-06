@@ -105,7 +105,7 @@ static esp_err_t es8388_init()
 }
 
 // #define BANDWIDTH_VAL 0.9995f
-#define BANDWIDTH_VAL 0.995f
+#define BANDWIDTH_VAL 0.75f
 
 #define INPUT_DIFFUSION_1_2_GAIN 0.750f
 #define INPUT_DIFFUSION_3_4_GAIN 0.625f
@@ -161,10 +161,12 @@ int16_t delay_ringbuffer(int16_t x, dsp_ring_buffer_t *buffer)
 		return x;
 	}
 
-	dsp_ring_buffer_put(buffer, x);
-	dsp_ring_buffer_read(buffer, &x);
+	int16_t y;
 
-	return x;
+	dsp_ring_buffer_read(buffer, &y);
+	dsp_ring_buffer_put(buffer, x);
+
+	return y;
 }
 
 int16_t delay(int16_t x, int16_t *delay_line, int delay_len)
@@ -285,7 +287,7 @@ static inline int16_t reverberance_filter(int16_t x)
 	REVERBERANCE_BUFFER = feedback;
 
 	// dry / wet ratio
-	int16_t out = (x * 0.3f) + (pre_mix * 0.7f);
+	int16_t out = (x * 0.6f) + (pre_mix * 0.4f);
 
 	// if ((samples % 1000) == 0) {
 	// 	printf("%d %d %d %d %d\n", x, pre_feedback, feedback, pre_mix, out);

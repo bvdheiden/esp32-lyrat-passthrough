@@ -5,6 +5,18 @@
         "target/esp32.cfg"
     ],
     "files.associations": {
-        "es8388_registers.h": "c"
+        "es8388_registers.h": "c",
+        "dsp_ring_buffer.h": "c",
+        "dsp_filter.h": "c",
+        "es8388.h": "c",
+        "i2c.h": "c",
+        "gpio.h": "c",
+        "*.ipp": "c",
+        "*.inc": "c",
+        "limits": "c",
+        "*.tcc": "c",
+        "cstdio": "c",
+        "string.h": "c",
+        "type_traits": "c"
     }
 }

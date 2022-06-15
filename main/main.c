@@ -1,9 +1,10 @@
 #include <esp_log.h>
 #include <driver/i2s.h>
 #include <driver/i2c.h>
+#include <driver/gpio.h>
 
 #include "es8388_registers.h"
-#include "dsp_ring_buffer.h"
+#include "dsp_filter.h"
 
 /*
  * Basic I2S and I2C Configuration
@@ -13,6 +14,8 @@
 
 #define I2C_NUM I2C_NUM_0
 #define ES8388_ADDR 0x20
+
+#define KEY_NUM GPIO_NUM_5
 
 /*
  * ES8388 Configuration Code
@@ -78,8 +81,8 @@ static esp_err_t es8388_init()
 	res |= es_write_reg(ES8388_ADDR, ES8388_DACCONTROL5, 0x00);
 	res |= es_write_reg(ES8388_ADDR, ES8388_DACCONTROL4, 0x00);
 
-	/* power down ADC while configuring; volume: +9dB for both channels */
-	res |= es_write_reg(ES8388_ADDR, ES8388_ADCPOWER, 0xff);
+	/* power down ADC while configuring; volume: +0dB for both channels */
+	res |= es_write_reg(ES8388_ADDR, ES8388_ADCPOWER, 0x00);
 	res |= es_write_reg(ES8388_ADDR, ES8388_ADCCONTROL1, 0x33);
 
 	/* select LINPUT2 / RINPUT2 as ADC input; stereo; 16 bit word length, format right-justified, MCLK / Fs = 256 */
@@ -104,196 +107,12 @@ static esp_err_t es8388_init()
 	return res;
 }
 
-// #define BANDWIDTH_VAL 0.9995f
-#define BANDWIDTH_VAL 0.75f
+static QueueHandle_t key_evt_queue = NULL;
 
-#define INPUT_DIFFUSION_1_2_GAIN 0.750f
-#define INPUT_DIFFUSION_3_4_GAIN 0.625f
-
-#define DECAY_DIFFUSION_1_GAIN 0.7f
-#define DECAY_DIFFUSION_2_GAIN 0.5f
-
-#define DAMPING_GAIN 0.0005f
-
-#define DECAY_GAIN 0.7f
-
-// use smaller buffer lengths
-#define INPUT_DIFFUSION_1_BUFFER_LENGTH 142
-#define INPUT_DIFFUSION_2_BUFFER_LENGTH 107
-#define INPUT_DIFFUSION_3_BUFFER_LENGTH 379
-#define INPUT_DIFFUSION_4_BUFFER_LENGTH 277
-
-#define DECAY_DIFFUSION_1_BUFFER_LENGTH 672
-#define DECAY_DIFFUSION_2_BUFFER_LENGTH 1800
-
-#define DAMPING_DELAY_1_BUFFER_LENGTH 4453
-#define DAMPING_DELAY_2_BUFFER_LENGTH 3720
-
-int16_t BANDWIDTH_FILTER_BUFFER = 0;
-
-int16_t INPUT_DIFFUSION_1_BUFFER[INPUT_DIFFUSION_1_BUFFER_LENGTH];
-dsp_ring_buffer_t INPUT_DIFFUSION_1_RINGBUFFER;
-int16_t INPUT_DIFFUSION_2_BUFFER[INPUT_DIFFUSION_2_BUFFER_LENGTH];
-dsp_ring_buffer_t INPUT_DIFFUSION_2_RINGBUFFER;
-int16_t INPUT_DIFFUSION_3_BUFFER[INPUT_DIFFUSION_3_BUFFER_LENGTH];
-dsp_ring_buffer_t INPUT_DIFFUSION_3_RINGBUFFER;
-int16_t INPUT_DIFFUSION_4_BUFFER[INPUT_DIFFUSION_4_BUFFER_LENGTH];
-dsp_ring_buffer_t INPUT_DIFFUSION_4_RINGBUFFER;
-
-dsp_ring_buffer_t DECAY_DIFFUSION_1_RINGBUFFER;
-int16_t DECAY_DIFFUSION_1_BUFFER[DECAY_DIFFUSION_1_BUFFER_LENGTH];
-dsp_ring_buffer_t DECAY_DIFFUSION_2_RINGBUFFER;
-int16_t DECAY_DIFFUSION_2_BUFFER[DECAY_DIFFUSION_2_BUFFER_LENGTH];
-
-int16_t DAMPING_FILTER_BUFFER = 0;
-
-dsp_ring_buffer_t DAMPING_DELAY_1_RINGBUFFER;
-int16_t DAMPING_DELAY_1_BUFFER[DAMPING_DELAY_1_BUFFER_LENGTH];
-dsp_ring_buffer_t DAMPING_DELAY_2_RINGBUFFER;
-int16_t DAMPING_DELAY_2_BUFFER[DAMPING_DELAY_2_BUFFER_LENGTH];
-
-int16_t REVERBERANCE_BUFFER = 0;
-
-int16_t delay_ringbuffer(int16_t x, dsp_ring_buffer_t *buffer)
+static void IRAM_ATTR key_isr_handler(void *arg)
 {
-	if (buffer->buffer_length == 0)
-	{
-		return x;
-	}
-
-	int16_t y;
-
-	dsp_ring_buffer_read(buffer, &y);
-	dsp_ring_buffer_put(buffer, x);
-
-	return y;
-}
-
-int16_t delay(int16_t x, int16_t *delay_line, int delay_len)
-{
-	if (delay_len == 0)
-	{
-		return x;
-	}
-
-	for (size_t i = delay_len - 1; i > 1; i--)
-	{
-		delay_line[i] = delay_line[i - 1];
-	}
-
-	delay_line[0] = x;
-
-	return delay_line[delay_len - 1];
-}
-
-int16_t bandwith_filter(int16_t x, int16_t *prev_sample, float gain)
-{
-	*prev_sample = (gain * x) + ((1.0f - gain) * (*prev_sample));
-
-	return *prev_sample;
-}
-
-int16_t damping_filter(int16_t x, int16_t *prev_sample, float gain)
-{
-	*prev_sample = (x * (1.0f - gain)) + ((*prev_sample) * gain);
-
-	return *prev_sample;
-}
-
-int16_t allpass_iir_filter(int16_t x, int16_t *delay_line, int delay_len, float gain)
-{
-	int16_t delayed_x = delay_line[delay_len - 1];
-
-	for (size_t i = delay_len - 1; i > 1; i--)
-	{
-		delay_line[i] = delay_line[i - 1];
-	}
-
-	x = x - (delayed_x * gain);
-
-	delay_line[0] = x;
-
-	return (x * gain) + delayed_x;
-}
-
-int16_t allpass_iir_filter_ringbuffer(int16_t x, dsp_ring_buffer_t *buffer, float gain)
-{
-	int16_t delayed_x;
-	dsp_ring_buffer_read(buffer, &delayed_x);
-
-	x = x - (delayed_x * gain);
-
-	dsp_ring_buffer_put(buffer, x);
-
-	return (x * gain) + delayed_x;
-}
-
-int16_t allpass_iir_filter_tap(int16_t x, int16_t *x_out, int16_t *delay_line, int delay_len, float gain)
-{
-	int16_t delayed_x = delay_line[delay_len - 1];
-
-	*x_out = delayed_x;
-
-	for (size_t i = delay_len - 1; i > 1; i--)
-	{
-		delay_line[i] = delay_line[i - 1];
-	}
-
-	x = x + (delayed_x * gain);
-
-	delay_line[0] = x;
-
-	return delayed_x - (x * gain);
-}
-
-int16_t allpass_iir_filter_tap_ringbuffer(int16_t x, int16_t *x_out, dsp_ring_buffer_t *buffer, float gain)
-{
-	int16_t delayed_x;
-	dsp_ring_buffer_read(buffer, &delayed_x);
-
-	*x_out = delayed_x;
-
-	x = x + (delayed_x * gain);
-
-	dsp_ring_buffer_put(buffer, x);
-
-	return delayed_x - (x * gain);
-}
-
-uint32_t samples = 0;
-
-static inline int16_t reverberance_filter(int16_t x)
-{
-	int16_t pre_feedback, feedback, pre_mix;
-
-	samples++;
-
-	pre_feedback = bandwith_filter(x, &BANDWIDTH_FILTER_BUFFER, BANDWIDTH_VAL);
-	pre_feedback = allpass_iir_filter_ringbuffer(pre_feedback, &INPUT_DIFFUSION_1_RINGBUFFER, INPUT_DIFFUSION_1_2_GAIN);
-	pre_feedback = allpass_iir_filter_ringbuffer(pre_feedback, &INPUT_DIFFUSION_2_RINGBUFFER, INPUT_DIFFUSION_1_2_GAIN);
-	pre_feedback = allpass_iir_filter_ringbuffer(pre_feedback, &INPUT_DIFFUSION_3_RINGBUFFER, INPUT_DIFFUSION_3_4_GAIN);
-	pre_feedback = allpass_iir_filter_ringbuffer(pre_feedback, &INPUT_DIFFUSION_4_RINGBUFFER, INPUT_DIFFUSION_3_4_GAIN);
-
-	feedback = pre_feedback + REVERBERANCE_BUFFER;
-
-	feedback = allpass_iir_filter_tap_ringbuffer(feedback, &pre_mix, &DECAY_DIFFUSION_1_RINGBUFFER, DECAY_DIFFUSION_1_GAIN);
-	feedback = delay_ringbuffer(feedback, &DAMPING_DELAY_1_RINGBUFFER);
-	feedback = damping_filter(feedback, &DAMPING_FILTER_BUFFER, DAMPING_GAIN);
-	feedback *= DECAY_GAIN;
-	feedback = allpass_iir_filter_ringbuffer(feedback, &DECAY_DIFFUSION_2_RINGBUFFER, DECAY_DIFFUSION_2_GAIN);
-	feedback = delay_ringbuffer(feedback, &DAMPING_DELAY_2_RINGBUFFER);
-	feedback *= DECAY_GAIN;
-
-	REVERBERANCE_BUFFER = feedback;
-
-	// dry / wet ratio
-	int16_t out = (x * 0.6f) + (pre_mix * 0.4f);
-
-	// if ((samples % 1000) == 0) {
-	// 	printf("%d %d %d %d %d\n", x, pre_feedback, feedback, pre_mix, out);
-	// }
-
-	return out;
+	uint32_t key = 1;
+	xQueueSendFromISR(key_evt_queue, &key, NULL);
 }
 
 /*
@@ -301,6 +120,16 @@ static inline int16_t reverberance_filter(int16_t x)
  */
 void app_main(void)
 {
+	gpio_pad_select_gpio(KEY_NUM);
+	gpio_set_direction(KEY_NUM, GPIO_MODE_INPUT);
+	gpio_set_intr_type(KEY_NUM, GPIO_INTR_POSEDGE);
+
+	gpio_install_isr_service(0);
+
+	gpio_isr_handler_add(KEY_NUM, key_isr_handler, NULL);
+
+	key_evt_queue = xQueueCreate(1, sizeof(uint32_t));
+
 	printf("[filter-dsp] Initializing audio codec via I2C...\r\n");
 
 	if (es8388_init() != ESP_OK)
@@ -311,17 +140,6 @@ void app_main(void)
 	{
 		printf("[filter-dsp] Audio codec initialization OK\r\n");
 	}
-
-	INPUT_DIFFUSION_1_RINGBUFFER = dsp_ring_buffer_init(INPUT_DIFFUSION_1_BUFFER, INPUT_DIFFUSION_1_BUFFER_LENGTH);
-	INPUT_DIFFUSION_2_RINGBUFFER = dsp_ring_buffer_init(INPUT_DIFFUSION_2_BUFFER, INPUT_DIFFUSION_2_BUFFER_LENGTH);
-	INPUT_DIFFUSION_3_RINGBUFFER = dsp_ring_buffer_init(INPUT_DIFFUSION_3_BUFFER, INPUT_DIFFUSION_3_BUFFER_LENGTH);
-	INPUT_DIFFUSION_4_RINGBUFFER = dsp_ring_buffer_init(INPUT_DIFFUSION_4_BUFFER, INPUT_DIFFUSION_4_BUFFER_LENGTH);
-
-	DECAY_DIFFUSION_1_RINGBUFFER = dsp_ring_buffer_init(DECAY_DIFFUSION_1_BUFFER, DECAY_DIFFUSION_1_BUFFER_LENGTH);
-	DECAY_DIFFUSION_2_RINGBUFFER = dsp_ring_buffer_init(DECAY_DIFFUSION_2_BUFFER, DECAY_DIFFUSION_2_BUFFER_LENGTH);
-
-	DAMPING_DELAY_1_RINGBUFFER = dsp_ring_buffer_init(DAMPING_DELAY_1_BUFFER, DAMPING_DELAY_1_BUFFER_LENGTH);
-	DAMPING_DELAY_2_RINGBUFFER = dsp_ring_buffer_init(DAMPING_DELAY_2_BUFFER, DAMPING_DELAY_2_BUFFER_LENGTH);
 
 	/*******************/
 
@@ -361,22 +179,38 @@ void app_main(void)
 
 	printf("[filter-dsp] Enabling Passthrough mode...\r\n");
 
+	reverberance_filter_init();
+
 	size_t i2s_bytes_read = 0;
 	size_t i2s_bytes_written = 0;
 
 	int16_t i2s_buffer_read[I2S_READLEN / sizeof(int16_t)];
 	int16_t i2s_buffer_write[I2S_READLEN / sizeof(int16_t)];
 
+	uint8_t decay_mode = 0;
+
 	/* continuously read data over I2S, pass it through the filtering function and write it back */
 	while (true)
 	{
+		uint32_t key_num = 0;
+		if (xQueueReceive(key_evt_queue, &key_num, 0))
+		{
+			decay_mode++;
+			if (decay_mode > 3)
+			{
+				decay_mode = 0;
+			}
+
+			ESP_LOGI("DSP", "dm: %d", decay_mode);
+		}
+
 		i2s_bytes_read = I2S_READLEN;
 		i2s_read(I2S_NUM, i2s_buffer_read, I2S_READLEN, &i2s_bytes_read, 100);
 
 		/* Both channels filter */
 		for (uint32_t i = 0; i < i2s_bytes_read / 2; i += 2)
 		{
-			i2s_buffer_write[i] = reverberance_filter(i2s_buffer_read[i + 1]);
+			i2s_buffer_write[i] = reverberance_filter_process(i2s_buffer_read[i + 1], decay_mode);
 			i2s_buffer_write[i + 1] = i2s_buffer_write[i];
 		}
 

@@ -17,6 +17,13 @@
         "*.tcc": "c",
         "cstdio": "c",
         "string.h": "c",
-        "type_traits": "c"
+        "type_traits": "c",
+        "chrono": "c",
+        "cinttypes": "c",
+        "cmath": "c",
+        "complex": "c",
+        "numeric": "c",
+        "ratio": "c",
+        "cstdlib": "c"
     }
 }

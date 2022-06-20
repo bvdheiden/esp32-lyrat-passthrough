@@ -111,7 +111,7 @@ static QueueHandle_t key_evt_queue = NULL;
 
 static void IRAM_ATTR key_isr_handler(void *arg)
 {
-	uint32_t key = 1;
+	uint8_t key = 1;
 	xQueueSendFromISR(key_evt_queue, &key, NULL);
 }
 
@@ -188,11 +188,11 @@ void app_main(void)
 	int16_t i2s_buffer_write[I2S_READLEN / sizeof(int16_t)];
 
 	uint8_t decay_mode = 0;
+	uint8_t key_num = 0;
 
 	/* continuously read data over I2S, pass it through the filtering function and write it back */
 	while (true)
 	{
-		uint32_t key_num = 0;
 		if (xQueueReceive(key_evt_queue, &key_num, 0))
 		{
 			decay_mode++;

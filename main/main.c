@@ -92,12 +92,12 @@ static esp_err_t es8388_init()
 	res |= es_write_reg(ES8388_ADDR, ES8388_ADCCONTROL5, 0x02);
 
 	/* set ADC volume */
-	res |= es_write_reg(ES8388_ADDR, ES8388_ADCCONTROL8, 0x20);
-	res |= es_write_reg(ES8388_ADDR, ES8388_ADCCONTROL9, 0x20);
-
+	res |= es_write_reg(ES8388_ADDR, ES8388_ADCCONTROL8, 0b00100000);
+	res |= es_write_reg(ES8388_ADDR, ES8388_ADCCONTROL9, 0b00100000);
+	
 	/* set LOUT1 / ROUT1 volume: 0dB (unattenuated) */
-	res |= es_write_reg(ES8388_ADDR, ES8388_DACCONTROL24, 0x1e);
-	res |= es_write_reg(ES8388_ADDR, ES8388_DACCONTROL25, 0x1e);
+	res |= es_write_reg(ES8388_ADDR, ES8388_DACCONTROL24, 0b00100001);
+	res |= es_write_reg(ES8388_ADDR, ES8388_DACCONTROL25, 0b00100001);
 
 	/* power up and enable DAC; power up ADC (no MIC bias) */
 	res |= es_write_reg(ES8388_ADDR, ES8388_DACPOWER, 0x3c);
@@ -147,7 +147,7 @@ void app_main(void)
 
 	i2s_config_t i2s_read_config = {
 		.mode = I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX,
-		.sample_rate = 44100,
+		.sample_rate = 48000,
 		.bits_per_sample = 16,
 		.communication_format = I2S_COMM_FORMAT_I2S,
 		.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,

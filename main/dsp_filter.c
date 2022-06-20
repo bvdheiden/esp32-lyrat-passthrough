@@ -152,9 +152,8 @@ int16_t reverberance_filter_process(int16_t x, uint8_t decay_mode)
 	reverb_init = allpass_iir_filter_ringbuffer(reverb_init, &INPUT_DIFFUSION_4_RINGBUFFER, INPUT_DIFFUSION_3_4_GAIN);
 
 	reverb_feedback = reverb_init + REVERBERANCE_BUFFER;
-	reverb_out = reverb_feedback;
-
 	reverb_feedback = allpass_iir_filter_ringbuffer(reverb_feedback, &DECAY_DIFFUSION_1_RINGBUFFER, DECAY_DIFFUSION_1_GAIN);
+	reverb_out = reverb_feedback;
 	reverb_feedback = delay_ringbuffer(reverb_feedback, &DAMPING_DELAY_1_RINGBUFFER);
 	reverb_feedback = damping_filter(reverb_feedback, &DAMPING_FILTER_BUFFER, DAMPING_GAIN);
 	reverb_feedback *= decay_values[decay_mode - 1];
